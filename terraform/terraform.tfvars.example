@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and fill in values
+
+region      = "us-east-1"
+bucket_name = "akshays3"
+
+# NOTE: S3 bucket names are globally unique across all AWS accounts.
+# If `akshays3` is already taken, use something like:
+# bucket_name = "akshays3-<your-unique-suffix>"
+
+# Optional
+# force_destroy = false
+# versioning    = true
+# sse_algorithm = "AES256"   # or "aws:kms"
+# kms_key_arn   = "arn:aws:kms:us-east-1:123456789012:key/xxxx-..."  # required if aws:kms
+# enable_intelligent_tiering                  = true
+# intelligent_tiering_archive_access_days     = 90
+# intelligent_tiering_deep_archive_access_days = 180
+# tags = {
+#   project = "rearcinfra"
+# }

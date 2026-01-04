@@ -32,6 +32,49 @@ override.tf.json
 # Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
 # example: *tfplan*
 
+# Terraform plan outputs
+tfplan
+tfplan.*
+tfplan*
+
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Local AWS credentials/env files (never commit)
+.env
+.env.*
+aws-credentials.env
+aws-credentials.env.*
+terraform/aws-credentials.env
+terraform/aws-credentials.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+deployment.zip
+ingestion_lambda.zip
+package/
+uv.lock
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

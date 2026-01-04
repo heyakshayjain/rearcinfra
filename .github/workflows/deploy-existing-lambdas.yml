@@ -1,0 +1,82 @@
+name: Deploy existing Lambda images
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'data/lambda/**'
+      - '.github/workflows/deploy-existing-lambdas.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Resolve ECR repository URIs
+        id: ecr
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AWS_REGION}" ]]; then
+            echo "Missing secret: AWS_REGION" >&2
+            exit 1
+          fi
+
+          SYNC_URI=$(aws ecr describe-repositories --repository-names rearc-sync-and-fetch --query 'repositories[0].repositoryUri' --output text)
+          ANALYTICS_URI=$(aws ecr describe-repositories --repository-names rearc-analytics --query 'repositories[0].repositoryUri' --output text)
+
+          echo "sync_uri=${SYNC_URI}" >> "$GITHUB_OUTPUT"
+          echo "analytics_uri=${ANALYTICS_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push sync_and_fetch image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}" -f data/lambda/sync_and_fetch/Dockerfile data/lambda/sync_and_fetch
+          docker push "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}"
+
+      - name: Build & push analytics image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t "${{ steps.ecr.outputs.analytics_uri }}:${IMAGE_TAG}" -f data/lambda/part3/Dockerfile data/lambda/part3
+          docker push "${{ steps.ecr.outputs.analytics_uri }}:${IMAGE_TAG}"
+
+      - name: Update Lambda functions to new image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws lambda update-function-code \
+            --function-name rearc-sync-and-fetch \
+            --image-uri "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}"
+
+          aws lambda wait function-updated --function-name rearc-sync-and-fetch
+
+          aws lambda update-function-code \
+            --function-name rearc-analytics \
+            --image-uri "${{ steps.ecr.outputs.analytics_uri }}:${IMAGE_TAG}"
+
+          aws lambda wait function-updated --function-name rearc-analytics

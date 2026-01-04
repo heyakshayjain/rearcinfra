@@ -131,15 +131,9 @@ cd data/notebooks
 jupyter notebook part3_analytics.ipynb
 ```
 
-## Deploy `data/ingestion` to Lambda via GitHub Actions
+## Deploy existing Lambdas via GitHub Actions
 
-This repo includes a zip-based Lambda deployment workflow for the ingestion code in `data/ingestion/`.
-
-### One-time: Create the Lambda function
-
-- Runtime: Python 3.11
-- Handler: `data.ingestion.lambda_handler.handler`
-- Ensure the Lambda execution role has permission to write to your S3 bucket.
+The Lambdas in this repo are deployed as container images (Terraform sets `package_type = "Image"`).
 
 ### Configure GitHub Secrets
 
@@ -148,16 +142,11 @@ Add these GitHub Actions secrets:
 - `AWS_REGION` (example: `us-east-1`)
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-- `INGESTION_LAMBDA_FUNCTION_NAME` (example: `rearc-ingestion`)
-
-Optional:
-
-- `INGESTION_LAMBDA_SMOKE_INVOKE`: set to `true` to invoke the function after deploy.
 
 ### Deploy
 
-- Push to `main` with changes under `data/ingestion/` or `data/constants.py`, or run the workflow manually.
-- Workflow file: `.github/workflows/deploy-ingestion-lambda.yml`
+- Push to `main` with changes under `data/lambda/`, or run the workflow manually.
+- Workflow file: `.github/workflows/deploy-existing-lambdas.yml`
 
 ## License
 

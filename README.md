@@ -72,7 +72,8 @@ Part 4 is the **automated pipeline wiring** (scheduling + triggers + queue) that
 - **GitHub Actions**: builds/pushes images and updates Lambda code to new image URIs.
 
 ### Architecture Diagram
-![alt text](image.png)
+
+![alt text](image-1.png)
 
 
 ## Code Logic (What Each Lambda Does)

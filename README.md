@@ -6,10 +6,10 @@ This repository contains a complete data pipeline solution for the Rearc Data Qu
 
 ```
 rearcinfra/
-├── terraform/              # Infrastructure as Code
-│   ├── main.tf            # S3 bucket configuration
-│   ├── lambda.tf          # Lambda functions (Part 4)
-│   ├── sqs.tf             # SQS queue (Part 4)
+├── terraform/              # Part 4: pipeline infrastructure (Terraform)
+│   ├── main.tf            # Core infrastructure
+│   ├── lambda.tf          # Lambdas used by the pipeline
+│   ├── sqs.tf             # SQS queue used by the pipeline
 │   └── ...
 ├── data/                   # Data processing code
 │   ├── lambda/
@@ -58,6 +58,8 @@ docker run --rm --entrypoint python rearc-sync-and-fetch:local -c "import handle
 
 ## System Design
 
+Part 4 is the **automated pipeline wiring** (scheduling + triggers + queue) that runs Parts 1–3 on AWS.
+
 ### Components
 
 - **AWS S3**: stores republished BLS files (`raw/bls/`) and the DataUSA JSON (`raw/datausa/population.json`).
@@ -70,22 +72,8 @@ docker run --rm --entrypoint python rearc-sync-and-fetch:local -c "import handle
 - **GitHub Actions**: builds/pushes images and updates Lambda code to new image URIs.
 
 ### Architecture Diagram
+![alt text](image.png)
 
-```mermaid
-flowchart LR
-  EB[EventBridge schedule\n(daily)] --> L1[Lambda: rearc-sync-and-fetch\n(container image)]
-  L1 -->|BLS files| S3[(S3 bucket\nraw/bls/*)]
-  L1 -->|writes population.json| S3
-  S3 -->|S3 notification\n(ObjectCreated: population.json)| SQS[SQS queue]
-  SQS --> L2[Lambda: rearc-analytics\n(container image)]
-  L2 --> CW[(CloudWatch Logs\nreports output)]
-
-  subgraph CI[CI/CD]
-    GH[GitHub Actions] --> ECR[(ECR repos\n:latest images)]
-    ECR --> L1
-    ECR --> L2
-  end
-```
 
 ## Code Logic (What Each Lambda Does)
 

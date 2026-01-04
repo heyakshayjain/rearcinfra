@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'data/lambda/**'
+      - 'data/**'
       - '.github/workflows/deploy-existing-lambdas.yml'
   workflow_dispatch:
 
@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker build -t "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}" -f data/lambda/sync_and_fetch/Dockerfile data/lambda/sync_and_fetch
+          docker build -t "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}" -f data/lambda/sync_and_fetch/Dockerfile .
           docker push "${{ steps.ecr.outputs.sync_uri }}:${IMAGE_TAG}"
 
       - name: Build & push analytics image

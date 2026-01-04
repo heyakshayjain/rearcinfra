@@ -7,12 +7,14 @@ destination bucket/prefix here.
 
 from __future__ import annotations
 
+import os
+
 
 BLS_BASE_URL: str = "https://download.bls.gov/pub/time.series/pr/"
 
 # Hardcoded destination for sync.
-S3_BUCKET: str = "akshays3-2026"
-S3_PREFIX: str = "raw/bls"
+S3_BUCKET: str = os.getenv("S3_BUCKET", "akshays3-2026")
+S3_PREFIX: str = os.getenv("S3_PREFIX", "raw/bls")
 
 
 DATAUSA_API_URL: str = (

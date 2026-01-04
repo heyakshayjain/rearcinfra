@@ -50,6 +50,26 @@ jobs:
           echo "sync_uri=${SYNC_URI}" >> "$GITHUB_OUTPUT"
           echo "analytics_uri=${ANALYTICS_URI}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Lambda package type is Image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SYNC_PKG=$(aws lambda get-function-configuration --function-name rearc-sync-and-fetch --query 'PackageType' --output text)
+          ANALYTICS_PKG=$(aws lambda get-function-configuration --function-name rearc-analytics --query 'PackageType' --output text)
+
+          echo "rearc-sync-and-fetch PackageType=${SYNC_PKG}"
+          echo "rearc-analytics PackageType=${ANALYTICS_PKG}"
+
+          if [[ "${SYNC_PKG}" != "Image" || "${ANALYTICS_PKG}" != "Image" ]]; then
+            echo "" >&2
+            echo "ERROR: One or more Lambdas are Zip-based. Docker image deployments require PackageType=Image." >&2
+            echo "Fix options:" >&2
+            echo "  1) Recreate/replace the functions as container-image Lambdas (PackageType=Image), then rerun this workflow." >&2
+            echo "  2) Switch CI to zip deployments instead of container images." >&2
+            exit 1
+          fi
+
       - name: Build & push sync_and_fetch image
         shell: bash
         run: |

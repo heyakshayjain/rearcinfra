@@ -105,8 +105,8 @@ def sync_bls_to_s3(
 		return
 	source_set = set(source_manifest.keys())
 
-	# 2) Destination listing (for delete step)
-	s3_names: set[str] = set()
+	# 2) Destination listing (for delete + skip uploads)
+	s3_objects: dict[str, dict[str, int | str]] = {}
 	paginator = s3.get_paginator("list_objects_v2")
 	for page in paginator.paginate(Bucket=bucket, Prefix=key_prefix):
 		for obj in page.get("Contents", []) or []:
@@ -114,15 +114,37 @@ def sync_bls_to_s3(
 			if not key.startswith(key_prefix):
 				continue
 			name = key[len(key_prefix) :]
-			if name:
-				s3_names.add(name)
+			if not name:
+				continue
+			# list_objects_v2 gives us object Size cheaply (no per-key HEAD).
+			s3_objects[name] = {
+				"key": key,
+				"size": int(obj.get("Size", 0) or 0),
+			}
 
-	print(f"CHECKPOINT source({len(source_set)}): {sorted(source_set)} | destination({len(s3_names)}): {sorted(s3_names)}")
+	print(
+		f"CHECKPOINT source({len(source_set)}): {sorted(source_set)} | "
+		f"destination({len(s3_objects)}): {sorted(s3_objects.keys())}"
+	)
 
 	uploaded = 0
+	skipped = 0
 	deleted = 0
 	for filename, (source_ts, source_size) in source_manifest.items():
 		key = key_prefix + filename
+
+		existing = s3_objects.get(filename)
+		if existing and int(existing.get("size", 0)) == int(source_size):
+			# Size matches. Only upload if the stored source metadata differs.
+			try:
+				head = s3.head_object(Bucket=bucket, Key=key)
+				meta = (head.get("Metadata") or {})
+				if meta.get("bls_timestamp") == source_ts and meta.get("bls_size") == str(source_size):
+					skipped += 1
+					continue
+			except Exception:
+				# If HEAD fails for any reason, fall back to uploading.
+				pass
 
 		body = _download_bls_file(base_url, filename, timeout_seconds=timeout_seconds)
 		metadata = {
@@ -134,7 +156,9 @@ def sync_bls_to_s3(
 		uploaded += 1
 
 	# 3) True sync delete
-	to_delete: list[dict[str, str]] = [{"Key": key_prefix + name} for name in (s3_names - source_set)]
+	to_delete: list[dict[str, str]] = [
+		{"Key": key_prefix + name} for name in (set(s3_objects.keys()) - source_set)
+	]
 
 	if to_delete:
 		# S3 DeleteObjects accepts up to 1000 keys per request.
@@ -143,7 +167,7 @@ def sync_bls_to_s3(
 			s3.delete_objects(Bucket=bucket, Delete={"Objects": chunk, "Quiet": True})
 		deleted = len(to_delete)
 
-	print(f"Synced {len(source_manifest)} files: uploaded={uploaded}, deleted={deleted}")
+	print(f"Synced {len(source_manifest)} files: uploaded={uploaded}, skipped={skipped}, deleted={deleted}")
 
 
 def main() -> int:

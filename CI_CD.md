@@ -2,7 +2,12 @@
 
 ## Overview
 
-This repo uses GitHub Actions to automatically deploy Lambda function code changes to AWS.
+This repo deploys the two existing Lambdas as **container images**:
+
+- `rearc-sync-and-fetch` (scheduled daily)
+- `rearc-analytics` (triggered from SQS)
+
+Terraform creates the infrastructure (including ECR repositories). GitHub Actions builds Docker images, pushes them to ECR, then updates the Lambda functions to the new image URIs.
 
 ## Setup
 
@@ -13,6 +18,7 @@ Go to your GitHub repo → Settings → Secrets and variables → Actions → Ne
 Add these secrets:
 - `AWS_ACCESS_KEY_ID` - Your AWS access key
 - `AWS_SECRET_ACCESS_KEY` - Your AWS secret key
+- `AWS_REGION` - AWS region (example: `us-east-1`)
 
 **Security Note:** Use a dedicated IAM user with minimal permissions (Lambda update only).
 
@@ -27,9 +33,18 @@ Create an IAM user with this policy:
     {
       "Effect": "Allow",
       "Action": [
-        "lambda:UpdateFunctionCode",
         "lambda:GetFunction",
-        "lambda:PublishVersion"
+        "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode",
+        "lambda:PublishVersion",
+
+        "ecr:DescribeRepositories",
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
       ],
       "Resource": [
         "arn:aws:lambda:us-east-1:*:function:rearc-sync-and-fetch",
@@ -43,51 +58,51 @@ Create an IAM user with this policy:
 ### 3. Workflow Triggers
 
 The CI/CD pipeline runs when:
-- Code is pushed to `main` branch in `data/lambda/` directory
+- Code is pushed to `main` branch under `data/`
 - Manually triggered via GitHub Actions UI
+
+Workflow file:
+
+- `.github/workflows/deploy-existing-lambdas.yml`
 
 ### 4. Deployment Process
 
 For each Lambda function:
-1. Install uv (fast Python package installer)
-2. Create virtual environment with uv
-3. Install Python dependencies via uv
-4. Package code + dependencies from venv into ZIP
-5. Upload to Lambda via `aws lambda update-function-code`
-6. Wait for update to complete
-7. Verify deployment
+1. Build a Docker image
+2. Push the image to ECR (`:latest` tag)
+3. Update the Lambda function code using the image URI (`aws lambda update-function-code --image-uri ...`)
+4. Wait for update to complete
 
 ### 5. Manual Deployment (Local)
 
-If you need to deploy manually:
+If you need to deploy manually (without GitHub Actions):
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Login to ECR
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
 
-# Deploy sync_and_fetch
-cd data/lambda/sync_and_fetch
-uv venv
-uv pip install -r requirements.txt
-cd .venv/lib/python3.11/site-packages
-zip -r ../../../../deployment.zip .
-cd ../../../../
-zip -g deployment.zip handler.py
+# Build and push sync_and_fetch (repo root context)
+docker build -t rearc-sync-and-fetch:latest -f data/lambda/sync_and_fetch/Dockerfile .
+SYNC_URI=$(aws ecr describe-repositories --repository-names rearc-sync-and-fetch --query 'repositories[0].repositoryUri' --output text)
+docker tag rearc-sync-and-fetch:latest "${SYNC_URI}:latest"
+docker push "${SYNC_URI}:latest"
+
 aws lambda update-function-code \
   --function-name rearc-sync-and-fetch \
-  --zip-file fileb://deployment.zip
+  --image-uri "${SYNC_URI}:latest"
+aws lambda wait function-updated --function-name rearc-sync-and-fetch
 
-# Deploy analytics
-cd data/lambda/part3
-uv venv
-uv pip install -r requirements.txt
-cd .venv/lib/python3.11/site-packages
-zip -r ../../../../deployment.zip .
-cd ../../../../
-zip -g deployment.zip handler.py
+# Build and push analytics
+docker build -t rearc-analytics:latest -f data/lambda/part3/Dockerfile data/lambda/part3
+ANALYTICS_URI=$(aws ecr describe-repositories --repository-names rearc-analytics --query 'repositories[0].repositoryUri' --output text)
+docker tag rearc-analytics:latest "${ANALYTICS_URI}:latest"
+docker push "${ANALYTICS_URI}:latest"
+
 aws lambda update-function-code \
   --function-name rearc-analytics \
-  --zip-file fileb://deployment.zip
+  --image-uri "${ANALYTICS_URI}:latest"
+aws lambda wait function-updated --function-name rearc-analytics
 ```
 
 ### 6. Testing Lambda Changes
@@ -96,7 +111,7 @@ After deployment, test locally:
 ```bash
 aws lambda invoke \
   --function-name rearc-sync-and-fetch \
-  --payload '{"task": "part2"}' \
+  --payload '{}' \
   response.json
 cat response.json
 ```

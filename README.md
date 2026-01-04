@@ -37,63 +37,78 @@ terraform plan
 terraform apply
 ```
 
-### Build & Push Lambda Container Images
+### Deploy Code (Container Images)
 
-Terraform creates the ECR repositories. After `terraform apply`, build and push both images:
+This repo deploys the two Lambdas as **container images** using GitHub Actions.
 
-```bash
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
-
-# sync_and_fetch
-docker build -t rearc-sync-and-fetch:latest -f data/lambda/sync_and_fetch/Dockerfile data/lambda/sync_and_fetch
-docker tag rearc-sync-and-fetch:latest "$(cd terraform && terraform output -raw ecr_sync_and_fetch_url):latest"
-docker push "$(cd terraform && terraform output -raw ecr_sync_and_fetch_url):latest"
-
-# analytics
-docker build -t rearc-analytics:latest -f data/lambda/part3/Dockerfile data/lambda/part3
-docker tag rearc-analytics:latest "$(cd terraform && terraform output -raw ecr_analytics_url):latest"
-docker push "$(cd terraform && terraform output -raw ecr_analytics_url):latest"
-
-# update Lambdas to use the new images
-cd terraform
-terraform apply
-```
+- Workflow: `.github/workflows/deploy-existing-lambdas.yml`
+- Trigger: push to `main` with changes under `data/` (or run manually)
+- Required GitHub secrets: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 
 ### Local Testing (Optional)
 
 ```bash
-cd data/lambda/part1
-pip install -r requirements.txt
-python -c "from handler import lambda_handler; lambda_handler({}, None)"
+# Build images locally
+docker build -t rearc-sync-and-fetch:local -f data/lambda/sync_and_fetch/Dockerfile .
+docker build -t rearc-analytics:local -f data/lambda/part3/Dockerfile data/lambda/part3
+
+# Smoke test import (does not run the network/S3 sync)
+docker run --rm --entrypoint python rearc-sync-and-fetch:local -c "import handler; print(handler.lambda_handler)"
 ```
 
-## Data Pipeline Architecture
+## System Design
 
-The pipeline consists of 4 parts:
+### Components
 
-### Part 1: BLS Data Sync
-- **What:** Syncs BLS time-series data from https://download.bls.gov/pub/time.series/pr/
-- **Where:** `data/lambda/part1/handler.py`
-- **Storage:** `s3://akshays3-2026/raw/bls/`
-- **Schedule:** Daily via EventBridge
+- **AWS S3**: stores republished BLS files (`raw/bls/`) and the DataUSA JSON (`raw/datausa/population.json`).
+- **AWS Lambda (Image)**:
+  - `rearc-sync-and-fetch`: runs Part 1 + Part 2 daily.
+  - `rearc-analytics`: runs Part 3 when SQS receives a message.
+- **Amazon EventBridge**: daily schedule triggers `rearc-sync-and-fetch`.
+- **Amazon SQS**: receives a message when `population.json` is written to S3.
+- **Amazon ECR**: stores the Docker images for both Lambdas.
+- **GitHub Actions**: builds/pushes images and updates Lambda code to new image URIs.
 
-### Part 2: DataUSA Population API
-- **What:** Fetches US population data from DataUSA API
-- **Where:** `data/lambda/part2/handler.py`
-- **Storage:** `s3://akshays3-2026/raw/datausa/population.json`
-- **Schedule:** Daily via EventBridge
+### Architecture Diagram
 
-### Part 3: Data Analytics
-- **What:** Analyzes BLS + population data (3 queries)
-- **Where:** 
-  - Lambda: `data/lambda/part3/handler.py`
-  - Notebook: `data/notebooks/part3_analytics.ipynb`
-- **Trigger:** SQS message when population.json is uploaded
+```mermaid
+flowchart LR
+  EB[EventBridge schedule\n(daily)] --> L1[Lambda: rearc-sync-and-fetch\n(container image)]
+  L1 -->|BLS files| S3[(S3 bucket\nraw/bls/*)]
+  L1 -->|writes population.json| S3
+  S3 -->|S3 notification\n(ObjectCreated: population.json)| SQS[SQS queue]
+  SQS --> L2[Lambda: rearc-analytics\n(container image)]
+  L2 --> CW[(CloudWatch Logs\nreports output)]
 
-### Part 4: Infrastructure Automation
-- **What:** Terraform IaC orchestrating Lambda + EventBridge + SQS
-- **Where:** `terraform/`
+  subgraph CI[CI/CD]
+    GH[GitHub Actions] --> ECR[(ECR repos\n:latest images)]
+    ECR --> L1
+    ECR --> L2
+  end
+```
+
+## Code Logic (What Each Lambda Does)
+
+### `rearc-sync-and-fetch` (Part 1 + Part 2)
+
+- **Entry point:** `data/lambda/sync_and_fetch/handler.py`
+- **Delegates to:** `data/ingestion/lambda_handler.py`
+- **Runs:**
+  - `data/ingestion/ingest.py`
+    - Lists BLS directory contents (no hardcoded filenames)
+    - Uploads *only changed/new* files to S3 (skips when size + stored BLS timestamp match)
+    - Deletes S3 objects that no longer exist upstream (true sync)
+  - `data/ingestion/usapi.py`
+    - Fetches the DataUSA population API
+    - Writes `raw/datausa/population.json` to S3
+
+**Config:** `S3_BUCKET` is provided to the Lambda as an environment variable by Terraform. Defaults in `data/constants.py` still work for local runs.
+
+### `rearc-analytics` (Part 3)
+
+- **Entry point:** `data/lambda/part3/handler.py`
+- **Trigger:** SQS messages created by the S3 notification when `population.json` is written
+- **Logic:** loads BLS `pr.data.0.Current` and DataUSA JSON from S3 and logs the 3 reports required by the assignment.
 
 ## Analytics Queries
 
@@ -102,51 +117,6 @@ The pipeline consists of 4 parts:
 3. **Series Join:** Match series PRS30006032 (Q01) with population by year
 
 See `data/notebooks/part3_analytics.ipynb` for detailed analysis.
-
-## S3 Bucket Configuration
-
-- **Name:** `akshays3-2026`
-- **Region:** `us-east-1`
-- **Features:**
-  - Versioning enabled
-  - Server-side encryption (AES256)
-  - Public access blocked
-  - Intelligent-Tiering (Archive at 90d, Deep Archive at 180d)
-  - Lifecycle: STANDARD_IA at 30d, GLACIER_IR at 60d
-
-## Resources Created
-
-- S3 bucket with lifecycle policies
-- 3 Lambda functions (Part 1, 2, 3)
-- EventBridge rule (daily schedule)
-- SQS queue
-- IAM roles and policies
-- CloudWatch logs
-
-## Testing
-
-Run the notebook locally:
-```bash
-cd data/notebooks
-jupyter notebook part3_analytics.ipynb
-```
-
-## Deploy existing Lambdas via GitHub Actions
-
-The Lambdas in this repo are deployed as container images (Terraform sets `package_type = "Image"`).
-
-### Configure GitHub Secrets
-
-Add these GitHub Actions secrets:
-
-- `AWS_REGION` (example: `us-east-1`)
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-
-### Deploy
-
-- Push to `main` with changes under `data/lambda/`, or run the workflow manually.
-- Workflow file: `.github/workflows/deploy-existing-lambdas.yml`
 
 ## License
 
